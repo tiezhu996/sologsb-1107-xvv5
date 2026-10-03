@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import type { FiberBatch, FiberBatchInput } from '../types/fiber-batch'
-import { db, plain } from '../utils/db'
+import { CURRENT_SCHEMA_REV, db, plain } from '../utils/db'
 
 interface FiberStore {
   fiberBatches: FiberBatch[]
   isLoading: boolean
   loaded: boolean
   error: string | null
-  loadFiberBatches: () => Promise<void>
+  loadFiberBatches: (force?: boolean) => Promise<void>
   addFiberBatch: (input: FiberBatchInput) => Promise<FiberBatch | null>
 }
 
@@ -16,8 +16,8 @@ export const useFiberStore = create<FiberStore>((set, get) => ({
   isLoading: false,
   loaded: false,
   error: null,
-  loadFiberBatches: async () => {
-    if (get().loaded) return
+  loadFiberBatches: async (force = false) => {
+    if (get().loaded && !force) return
     set({ isLoading: true, error: null })
     try {
       const fiberBatches = await db.fiberBatches.orderBy('batchNo').toArray()
@@ -30,8 +30,8 @@ export const useFiberStore = create<FiberStore>((set, get) => ({
     set({ error: null })
     try {
       const payload = plain(input)
-      const id = Number(await db.fiberBatches.add(payload))
-      const created: FiberBatch = { ...payload, id, schemaRev: 2 }
+      const id = Number(await db.fiberBatches.add({ ...payload, schemaRev: CURRENT_SCHEMA_REV }))
+      const created: FiberBatch = { ...payload, id, schemaRev: CURRENT_SCHEMA_REV }
       set((state) => ({ fiberBatches: [created, ...state.fiberBatches] }))
       return created
     } catch {

@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import type { Mould, MouldInput, MouldStateValue } from '../types/mould'
-import { db, plain } from '../utils/db'
+import { CURRENT_SCHEMA_REV, db, plain } from '../utils/db'
 
 interface MouldStore {
   moulds: Mould[]
   isLoading: boolean
   loaded: boolean
   error: string | null
-  loadMoulds: () => Promise<void>
+  loadMoulds: (force?: boolean) => Promise<void>
   addMould: (input: MouldInput) => Promise<Mould | null>
   setMouldState: (id: number, state: MouldStateValue) => Promise<void>
 }
@@ -17,8 +17,8 @@ export const useMouldStore = create<MouldStore>((set, get) => ({
   isLoading: false,
   loaded: false,
   error: null,
-  loadMoulds: async () => {
-    if (get().loaded) return
+  loadMoulds: async (force = false) => {
+    if (get().loaded && !force) return
     set({ isLoading: true, error: null })
     try {
       const moulds = await db.moulds.orderBy('mouldNo').toArray()
@@ -30,9 +30,14 @@ export const useMouldStore = create<MouldStore>((set, get) => ({
   addMould: async (input) => {
     set({ error: null })
     try {
-      const payload = plain(input)
-      const id = Number(await db.moulds.add(payload))
-      const created: Mould = { ...payload, id, schemaRev: 2 }
+      // 新纸帘当前规格为 v1、初始来源
+      const payload: MouldInput = {
+        ...plain(input),
+        specRev: 1,
+        specSource: { kind: 'initial' },
+      }
+      const id = Number(await db.moulds.add({ ...payload, schemaRev: CURRENT_SCHEMA_REV }))
+      const created: Mould = { ...payload, id, schemaRev: CURRENT_SCHEMA_REV }
       set((state) => ({ moulds: [created, ...state.moulds] }))
       return created
     } catch {
@@ -42,9 +47,9 @@ export const useMouldStore = create<MouldStore>((set, get) => ({
   },
   setMouldState: async (id, nextState) => {
     try {
-      await db.moulds.update(id, { state: nextState, schemaRev: 2 })
+      await db.moulds.update(id, { state: nextState })
       set((state) => ({
-        moulds: state.moulds.map((mould) => (mould.id === id ? { ...mould, state: nextState, schemaRev: 2 } : mould)),
+        moulds: state.moulds.map((mould) => (mould.id === id ? { ...mould, state: nextState } : mould)),
         error: null,
       }))
     } catch {

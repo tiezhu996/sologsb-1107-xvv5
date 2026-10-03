@@ -1,16 +1,18 @@
 import { create } from 'zustand'
 import type { SheetRun, SheetRunInput } from '../types/sheet-run'
-import { db, plain } from '../utils/db'
+import { CURRENT_SCHEMA_REV, db, plain } from '../utils/db'
+import { snapshotForRun } from '../utils/specVersion'
 import { calculateDeviation } from '../utils/stripe'
+import type { Mould } from '../types/mould'
 
 interface RunStore {
   sheetRuns: SheetRun[]
   isLoading: boolean
   loaded: boolean
   error: string | null
-  loadRuns: () => Promise<void>
-  addRun: (input: SheetRunInput) => Promise<SheetRun | null>
-  updateMeasuredGap: (id: number, measuredGap: number, standardGap: number) => Promise<void>
+  loadRuns: (force?: boolean) => Promise<void>
+  addRun: (input: SheetRunInput, mould: Mould) => Promise<SheetRun | null>
+  updateMeasuredGap: (id: number, measuredGap: number) => Promise<void>
 }
 
 export const useRunStore = create<RunStore>((set, get) => ({
@@ -18,8 +20,8 @@ export const useRunStore = create<RunStore>((set, get) => ({
   isLoading: false,
   loaded: false,
   error: null,
-  loadRuns: async () => {
-    if (get().loaded) return
+  loadRuns: async (force = false) => {
+    if (get().loaded && !force) return
     set({ isLoading: true, error: null })
     try {
       const sheetRuns = await db.sheetRuns.orderBy('runDate').reverse().toArray()
@@ -28,12 +30,20 @@ export const useRunStore = create<RunStore>((set, get) => ({
       set({ isLoading: false, error: '抄纸工序读取失败，请检查浏览器存储权限' })
     }
   },
-  addRun: async (input) => {
+  addRun: async (input, mould) => {
     set({ error: null })
     try {
-      const payload = plain(input)
+      // 登记时把纸帘当前规格锁进工序；新工序才用返修后的版本
+      const spec = snapshotForRun(mould)
+      const deviation = calculateDeviation(input.measuredGap, spec.specStripeGap)
+      const payload: SheetRun = {
+        ...plain(input),
+        deviation,
+        ...spec,
+        schemaRev: CURRENT_SCHEMA_REV,
+      }
       const id = Number(await db.sheetRuns.add(payload))
-      const created: SheetRun = { ...payload, id, schemaRev: 2 }
+      const created: SheetRun = { ...payload, id }
       set((state) => ({ sheetRuns: [created, ...state.sheetRuns] }))
       return created
     } catch {
@@ -41,12 +51,15 @@ export const useRunStore = create<RunStore>((set, get) => ({
       return null
     }
   },
-  updateMeasuredGap: async (id, measuredGap, standardGap) => {
+  updateMeasuredGap: async (id, measuredGap) => {
+    // 偏差始终按该工序锁定版本的标准间距，不随纸帘返修而改判
+    const existing = get().sheetRuns.find((run) => run.id === id)
+    const standardGap = existing?.specStripeGap ?? measuredGap
     const deviation = calculateDeviation(measuredGap, standardGap)
     try {
-      await db.sheetRuns.update(id, { measuredGap, deviation, schemaRev: 2 })
+      await db.sheetRuns.update(id, { measuredGap, deviation })
       set((state) => ({
-        sheetRuns: state.sheetRuns.map((run) => (run.id === id ? { ...run, measuredGap, deviation, schemaRev: 2 } : run)),
+        sheetRuns: state.sheetRuns.map((run) => (run.id === id ? { ...run, measuredGap, deviation } : run)),
         error: null,
       }))
     } catch {
