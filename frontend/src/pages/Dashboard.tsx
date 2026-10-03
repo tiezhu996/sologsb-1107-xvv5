@@ -58,12 +58,13 @@ export default function Dashboard() {
   const { filteredMoulds: activeMoulds } = useMouldFilter(moulds, '', '在用')
   const currentWeekRuns = useMemo(() => runs.filter((run) => isInCurrentWeek(run.runDate)), [runs])
   const runById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs])
+  const mouldById = useMemo(() => new Map(moulds.map((mould) => [mould.id, mould])), [moulds])
   const pendingSamples = useMemo(
-    () => samples.filter((sample) => {
-      const run = runById.get(sample.runId)
-      return sample.evenness !== '均匀' || (run ? isGapOutOfTolerance(run.deviation) : false)
-    }),
-    [runById, samples],
+    () =>
+      samples.filter(
+        (sample) => (sample.recheckState ?? '未复检') !== '已复检' && (sample.archiveState ?? '待归档') !== '已归档',
+      ),
+    [samples],
   )
   const activeRate = moulds.length ? Math.round((activeMoulds.length / moulds.length) * 100) : 0
   const error = mouldError ?? batchError ?? runError ?? sampleError
@@ -85,7 +86,7 @@ export default function Dashboard() {
         <StatBadge label="在册纸帘" value={moulds.length} detail={`在用 ${activeMoulds.length} 张`} />
         <StatBadge label="纤维料批" value={batches.length} detail="覆盖四类造纸纤维" tone="bamboo" />
         <StatBadge label="本周工序" value={currentWeekRuns.length} detail="按自然周统计" tone="bamboo" />
-        <StatBadge label="待复检样本" value={pendingSamples.length} detail="匀度或帘纹偏差需复核" tone={pendingSamples.length ? 'warning' : 'neutral'} />
+        <StatBadge label="待复检样本" value={pendingSamples.length} detail="返修标出或未复检，复检后才能归档" tone={pendingSamples.length ? 'warning' : 'neutral'} />
       </Box>
 
       <Grid container spacing={2.5}>
@@ -144,9 +145,70 @@ export default function Dashboard() {
         <CardContent sx={{ p: { xs: 2, md: 3 } }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 1.5 }}>
             <Box>
+              <Typography variant="h5">本周工序的规格依据</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                每条工序锁定登记时的纸帘规格版本，偏差按锁定规格判定；纸帘返修后旧工序不重判。
+              </Typography>
+            </Box>
+            <Chip label={`${currentWeekRuns.length} 槽`} variant="outlined" />
+          </Box>
+          <Box sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 720 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>工序 / 日期</TableCell>
+                  <TableCell>纸帘</TableCell>
+                  <TableCell>依据规格版本</TableCell>
+                  <TableCell align="right">实测间距</TableCell>
+                  <TableCell>偏差判定</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {currentWeekRuns.map((run) => {
+                  const mould = mouldById.get(run.mouldId)
+                  const lockedRev = run.specRev ?? 1
+                  const lockedGap = run.specStripeGap ?? mould?.stripeGap ?? 0
+                  const reworked = mould !== undefined && (mould.specRev ?? 1) !== lockedRev
+                  return (
+                    <TableRow key={run.id ?? run.runNo}>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{run.runNo}</Typography>
+                        <Typography variant="caption" color="text.secondary">{run.runDate}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        {mould?.mouldNo ?? '未关联'}
+                        {reworked && (
+                          <Typography variant="caption" color="warning.dark" sx={{ display: 'block' }}>纸帘已返修 · 现行 v{mould?.specRev ?? 1}</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" variant="outlined" label={`v${lockedRev} · 丝径 ${(run.specWireDiameter ?? mould?.wireDiameter ?? 0).toFixed(2)} mm · 间距 ${lockedGap.toFixed(2)} mm`} />
+                      </TableCell>
+                      <TableCell align="right">{run.measuredGap.toFixed(2)} mm</TableCell>
+                      <TableCell>
+                        <Chip size="small" color={isGapOutOfTolerance(run.deviation) ? 'warning' : 'success'} label={`${run.deviation > 0 ? '+' : ''}${run.deviation.toFixed(2)} mm`} />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+                {currentWeekRuns.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} align="center" sx={{ py: 4 }}>本周尚无抄纸工序</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 1.5 }}>
+            <Box>
               <Typography variant="h5">待复检样本</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                偏差绝对值超过 0.2 mm 或透光匀度不达“均匀”的记录标黄。
+                返修单应用时标出的样本与尚未复检的样本在此列出，复检后才能归档。
               </Typography>
             </Box>
             <Chip label={`${pendingSamples.length} 条提醒`} color={pendingSamples.length ? 'warning' : 'success'} />
@@ -157,9 +219,11 @@ export default function Dashboard() {
                 <TableRow>
                   <TableCell>样本号</TableCell>
                   <TableCell>对应工序</TableCell>
+                  <TableCell>工序依据规格</TableCell>
                   <TableCell>匀度</TableCell>
                   <TableCell align="right">帘纹条数</TableCell>
                   <TableCell>帘纹偏差</TableCell>
+                  <TableCell>复检状态</TableCell>
                   <TableCell>存档位</TableCell>
                 </TableRow>
               </TableHead>
@@ -167,14 +231,21 @@ export default function Dashboard() {
                 {pendingSamples.map((sample) => {
                   const run = runById.get(sample.runId)
                   const deviation = run?.deviation ?? 0
+                  const recheckState = sample.recheckState ?? '未复检'
                   return (
                     <TableRow key={sample.id ?? sample.sampleNo} sx={{ bgcolor: '#fff8df' }}>
                       <TableCell sx={{ fontWeight: 700 }}>{sample.sampleNo}</TableCell>
                       <TableCell>{run?.runNo ?? '工序待关联'}</TableCell>
+                      <TableCell>
+                        {run ? `v${run.specRev ?? 1} · 间距 ${(run.specStripeGap ?? 0).toFixed(2)} mm` : '待补'}
+                      </TableCell>
                       <TableCell>{sample.evenness}</TableCell>
                       <TableCell align="right">{sample.stripeCount}</TableCell>
                       <TableCell>
                         <Chip size="small" color={isGapOutOfTolerance(deviation) ? 'warning' : 'default'} label={`${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} mm`} />
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" color={recheckState === '待复检' ? 'warning' : 'default'} variant="outlined" label={recheckState} />
                       </TableCell>
                       <TableCell>{sample.archiveBin}</TableCell>
                     </TableRow>
@@ -182,7 +253,7 @@ export default function Dashboard() {
                 })}
                 {pendingSamples.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} align="center" sx={{ py: 4 }}>当前没有待复检样本</TableCell>
+                    <TableCell colSpan={8} align="center" sx={{ py: 4 }}>当前没有待复检样本</TableCell>
                   </TableRow>
                 )}
               </TableBody>

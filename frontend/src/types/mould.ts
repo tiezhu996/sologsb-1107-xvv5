@@ -15,7 +15,9 @@ export interface Mould {
   meshDensity: number
   weaver: string
   state: MouldStateValue
+  /** 当前规格版本，返修单应用后递增；台帐始终保留现行规格 */
+  specRev: number
   schemaRev?: number
 }
 
-export type MouldInput = Omit<Mould, 'id' | 'schemaRev'>
+export type MouldInput = Omit<Mould, 'id' | 'schemaRev' | 'specRev'>

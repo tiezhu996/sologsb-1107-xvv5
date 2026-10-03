@@ -17,6 +17,9 @@ const emptySampleForm: PaperSampleInput = {
   stripeCount: 45,
   evenness: '均匀',
   archiveBin: '待归档-01',
+  specRev: 1,
+  recheckState: '未复检',
+  archiveState: '待归档',
 }
 
 function stripeTier(count: number): { label: string; color: 'success' | 'info' | 'warning' } {
@@ -30,6 +33,8 @@ export default function SampleCards() {
   const error = useSampleStore((state) => state.error)
   const loadSamples = useSampleStore((state) => state.loadSamples)
   const addSample = useSampleStore((state) => state.addSample)
+  const recheckSample = useSampleStore((state) => state.recheckSample)
+  const archiveSample = useSampleStore((state) => state.archiveSample)
   const runs = useRunStore((state) => state.sheetRuns)
   const runError = useRunStore((state) => state.error)
   const loadRuns = useRunStore((state) => state.loadRuns)
@@ -56,7 +61,9 @@ export default function SampleCards() {
     [evennessFilter, samples, stripeFloor],
   )
   const denseCount = samples.filter((sample) => sample.stripeCount >= 50).length
-  const recheckCount = samples.filter((sample) => sample.evenness !== '均匀').length
+  const recheckCount = samples.filter(
+    (sample) => (sample.recheckState ?? '未复检') !== '已复检' && (sample.archiveState ?? '待归档') !== '已归档',
+  ).length
 
   const updateForm = <K extends keyof PaperSampleInput,>(key: K, value: PaperSampleInput[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
@@ -65,7 +72,16 @@ export default function SampleCards() {
   const handleSubmit = async () => {
     if (!form.sampleNo.trim() || !form.archiveBin.trim() || form.sizeMm <= 0 || form.stripeCount <= 0) return
     setSubmitting(true)
-    const created = await addSample({ ...form, sampleNo: form.sampleNo.trim(), archiveBin: form.archiveBin.trim() })
+    // 样本锁定对应工序的规格版本，新样本默认未复检、待归档
+    const lockedRun = runById.get(form.runId)
+    const created = await addSample({
+      ...form,
+      sampleNo: form.sampleNo.trim(),
+      archiveBin: form.archiveBin.trim(),
+      specRev: lockedRun?.specRev ?? 1,
+      recheckState: '未复检',
+      archiveState: '待归档',
+    })
     setSubmitting(false)
     if (created) {
       setForm(emptySampleForm)
@@ -121,7 +137,7 @@ export default function SampleCards() {
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
         <StatBadge label="样本总数" value={samples.length} detail="档案柜入库数量" />
         <StatBadge label="密纹样本" value={denseCount} detail="帘纹条数不少于 50" tone="bamboo" />
-        <StatBadge label="待复检" value={recheckCount} detail="匀度非“均匀”" tone={recheckCount ? 'warning' : 'neutral'} />
+        <StatBadge label="待复检" value={recheckCount} detail="含返修标出，复检后才能归档" tone={recheckCount ? 'warning' : 'neutral'} />
       </Box>
 
       <Card>
@@ -150,15 +166,35 @@ export default function SampleCards() {
           const mould = run ? mouldById.get(run.mouldId) : undefined
           const tier = stripeTier(sample.stripeCount)
           const gap = run?.measuredGap ?? mould?.stripeGap ?? 1
+          const recheckState = sample.recheckState ?? '未复检'
+          const archiveState = sample.archiveState ?? '待归档'
+          const rechecked = recheckState === '已复检'
+          const archived = archiveState === '已归档'
+          const lockedRev = sample.specRev ?? run?.specRev ?? 1
+          const archiveHint = archived
+            ? `已于 ${sample.archivedAt ?? '此前'} 归档`
+            : rechecked
+              ? '已复检，可归档'
+              : recheckState === '待复检'
+                ? '返修标出待复检，复检后才能归档'
+                : '未复检，复检后才能归档'
           return (
-            <Card key={sample.id ?? sample.sampleNo} data-testid="row-sample" sx={{ bgcolor: sample.evenness === '均匀' ? '#fffdf7' : '#fff9e8' }}>
+            <Card key={sample.id ?? sample.sampleNo} data-testid="row-sample" sx={{ bgcolor: archived ? '#f4f2ec' : rechecked ? '#fffdf7' : '#fff9e8' }}>
               <CardContent sx={{ p: 2.25 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, alignItems: 'flex-start', mb: 1.5 }}>
                   <Box>
                     <Typography variant="h6" sx={{ fontWeight: 800 }}>{sample.sampleNo}</Typography>
-                    <Typography variant="caption" color="text.secondary">工序 {run?.runNo ?? '待关联'} · {run?.runDate ?? '日期待补'}</Typography>
+                    <Typography variant="caption" color="text.secondary">工序 {run?.runNo ?? '待关联'} · {run?.runDate ?? '日期待补'} · 规格 v{lockedRev}</Typography>
                   </Box>
-                  <Chip size="small" color={tier.color} label={tier.label} />
+                  <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <Chip size="small" color={tier.color} label={tier.label} />
+                    <Chip
+                      size="small"
+                      color={rechecked ? 'success' : recheckState === '待复检' ? 'warning' : 'default'}
+                      variant={rechecked ? 'filled' : 'outlined'}
+                      label={recheckState}
+                    />
+                  </Box>
                 </Box>
                 <GrainStripePreview
                   gap={gap}
@@ -173,9 +209,39 @@ export default function SampleCards() {
                   <Grid item xs={6}><Typography variant="caption" color="text.secondary">样本尺寸</Typography><Typography>{sample.sizeMm} mm · {mmToCm(sample.sizeMm)} cm</Typography></Grid>
                   <Grid item xs={6}><Typography variant="caption" color="text.secondary">纸页克重</Typography><Typography>{run ? formatGrammage(run.grammage) : '待补'}</Typography></Grid>
                 </Grid>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'center', mt: 1.5 }}>
-                  <Chip size="small" variant="outlined" label={`存档 ${sample.archiveBin}`} />
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'center', mt: 1.5, flexWrap: 'wrap' }}>
+                  <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                    <Chip size="small" variant="outlined" label={`存档 ${sample.archiveBin}`} />
+                    <Chip size="small" color={archived ? 'success' : 'default'} variant={archived ? 'filled' : 'outlined'} label={archiveState} />
+                  </Box>
                   {run && isGapOutOfTolerance(run.deviation) && <Chip size="small" color="warning" label={`偏差 ${run.deviation > 0 ? '+' : ''}${run.deviation.toFixed(2)} mm`} />}
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'center', mt: 1.5 }}>
+                  <Typography variant="caption" color={archived || rechecked ? 'text.secondary' : 'warning.dark'}>{archiveHint}</Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={sample.id === undefined || rechecked || archived}
+                      onClick={() => {
+                        if (sample.id !== undefined) void recheckSample(sample.id)
+                      }}
+                      data-testid={sample.id === undefined ? undefined : `recheck-sample-${sample.id}`}
+                    >
+                      {rechecked ? '已复检' : '登记复检'}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={sample.id === undefined || !rechecked || archived}
+                      onClick={() => {
+                        if (sample.id !== undefined) void archiveSample(sample.id)
+                      }}
+                      data-testid={sample.id === undefined ? undefined : `archive-sample-${sample.id}`}
+                    >
+                      {archived ? '已归档' : '归档'}
+                    </Button>
+                  </Box>
                 </Box>
               </CardContent>
             </Card>

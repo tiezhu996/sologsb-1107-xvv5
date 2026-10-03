@@ -26,6 +26,9 @@ const emptyRunForm: SheetRunInput = {
   grammage: 32,
   measuredGap: 1.1,
   deviation: 0,
+  specRev: 1,
+  specWireDiameter: 0.3,
+  specStripeGap: 1.1,
 }
 
 const processSteps: ProcessStep[] = [
@@ -85,14 +88,31 @@ export default function RunBoard() {
     setForm((current) => {
       const mould = mouldById.get(mouldId)
       const standardGap = mould?.stripeGap ?? current.measuredGap
-      return { ...current, mouldId, measuredGap: standardGap, deviation: calculateDeviation(standardGap, standardGap) }
+      return {
+        ...current,
+        mouldId,
+        measuredGap: standardGap,
+        deviation: calculateDeviation(standardGap, standardGap),
+        specRev: mould?.specRev ?? 1,
+        specWireDiameter: mould?.wireDiameter ?? current.specWireDiameter,
+        specStripeGap: standardGap,
+      }
     })
   }
 
   const handleSubmit = async () => {
     if (!form.runNo.trim() || !form.operator.trim() || form.measuredGap <= 0 || form.grammage <= 0) return
     setSubmitting(true)
-    const created = await addRun({ ...form, runNo: form.runNo.trim(), operator: form.operator.trim(), deviation: formDeviation })
+    // 新工序锁定纸帘现行规格版本，旧工序仍按各自锁定规格判定
+    const created = await addRun({
+      ...form,
+      runNo: form.runNo.trim(),
+      operator: form.operator.trim(),
+      deviation: formDeviation,
+      specRev: selectedMould?.specRev ?? 1,
+      specWireDiameter: selectedMould?.wireDiameter ?? form.specWireDiameter,
+      specStripeGap: selectedMould?.stripeGap ?? form.measuredGap,
+    })
     setSubmitting(false)
     if (created) {
       setForm(emptyRunForm)
@@ -119,9 +139,15 @@ export default function RunBoard() {
       {showForm && (
         <Card data-testid="form-run" sx={{ borderColor: '#9eb096' }}>
           <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
               <Typography variant="h5">登记抄纸工序</Typography>
-              <Chip color={isGapOutOfTolerance(formDeviation) ? 'warning' : 'success'} label={`偏差 ${formDeviation > 0 ? '+' : ''}${formDeviation.toFixed(2)} mm`} />
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Chip
+                  variant="outlined"
+                  label={`锁定规格 v${selectedMould?.specRev ?? 1} · 丝径 ${(selectedMould?.wireDiameter ?? 0).toFixed(2)} mm · 标准间距 ${(selectedMould?.stripeGap ?? form.measuredGap).toFixed(2)} mm`}
+                />
+                <Chip color={isGapOutOfTolerance(formDeviation) ? 'warning' : 'success'} label={`偏差 ${formDeviation > 0 ? '+' : ''}${formDeviation.toFixed(2)} mm`} />
+              </Box>
             </Box>
             <Grid container spacing={2}>
               <Grid item xs={12} md={3}><TextField fullWidth label="工序编号" value={form.runNo} onChange={(event) => updateForm('runNo', event.target.value)} inputProps={{ 'data-testid': 'field-runNo' }} /></Grid>
@@ -224,8 +250,11 @@ export default function RunBoard() {
               const mould = mouldById.get(run.mouldId)
               const batch = batchById.get(run.batchId)
               const draftGap = run.id === undefined ? run.measuredGap : draftGaps[run.id] ?? run.measuredGap
-              const draftDeviation = calculateDeviation(draftGap, mould?.stripeGap ?? draftGap)
+              const lockedRev = run.specRev ?? 1
+              const lockedGap = run.specStripeGap ?? mould?.stripeGap ?? draftGap
+              const draftDeviation = calculateDeviation(draftGap, lockedGap)
               const exceeded = isGapOutOfTolerance(draftDeviation)
+              const mouldReworked = mould !== undefined && (mould.specRev ?? 1) !== lockedRev
               return (
                 <TableRow key={run.id ?? run.runNo} data-testid="row-run" hover sx={{ bgcolor: exceeded ? '#fff7d9' : undefined }}>
                   <TableCell>
@@ -235,6 +264,9 @@ export default function RunBoard() {
                   <TableCell>
                     <Typography variant="body2">{mould?.mouldNo ?? '未关联纸帘'}</Typography>
                     <Typography variant="caption" color="text.secondary">{batch?.batchNo ?? '未关联料批'} · {batch?.material ?? '待补'}</Typography>
+                    {mouldReworked && (
+                      <Typography variant="caption" color="warning.dark" sx={{ display: 'block' }}>纸帘已返修 · 现行规格 v{mould?.specRev ?? 1}</Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2">{run.stripeDirection} · 荡料 {run.dipCount} 次</Typography>
@@ -252,7 +284,11 @@ export default function RunBoard() {
                       max={5}
                       step={0.01}
                       testId={run.id === undefined ? undefined : `row-measuredGap-${run.id}`}
-                      helperText={<Typography component="span" variant="caption" color={exceeded ? 'warning.dark' : 'text.secondary'}>{exceeded ? '超差：' : '合格：'}{getGapConclusion(draftDeviation)}（{draftDeviation > 0 ? '+' : ''}{draftDeviation.toFixed(2)} mm）</Typography>}
+                      helperText={
+                        <Typography component="span" variant="caption" color={exceeded ? 'warning.dark' : 'text.secondary'}>
+                          {exceeded ? '超差：' : '合格：'}{getGapConclusion(draftDeviation)}（{draftDeviation > 0 ? '+' : ''}{draftDeviation.toFixed(2)} mm）· 依据规格 v{lockedRev}，标准 {lockedGap.toFixed(2)} mm
+                        </Typography>
+                      }
                       compact
                     />
                   </TableCell>
@@ -263,7 +299,7 @@ export default function RunBoard() {
                       color={exceeded ? 'warning' : 'primary'}
                       disabled={run.id === undefined || draftGap === run.measuredGap}
                       onClick={() => {
-                        if (run.id !== undefined) void updateMeasuredGap(run.id, draftGap, mould?.stripeGap ?? draftGap)
+                        if (run.id !== undefined) void updateMeasuredGap(run.id, draftGap, lockedGap)
                       }}
                     >
                       {draftGap === run.measuredGap ? '已记录' : '保存实测'}

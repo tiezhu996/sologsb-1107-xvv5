@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Alert, Box, Button, Card, CardContent, Chip, Divider, Grid, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography } from '@mui/material'
 import { GrainStripePreview } from '../components/common/GrainStripePreview'
 import { RulerInput } from '../components/common/RulerInput'
+import { ReworkOrderBoard } from '../components/rework/ReworkOrderBoard'
 import { useMouldFilter } from '../hooks/useMouldFilter'
 import { useUnitConvert } from '../hooks/useUnitConvert'
 import { useMouldStore } from '../stores/mouldStore'
+import { useReworkStore } from '../stores/reworkStore'
 import { useRunStore } from '../stores/runStore'
 import { MOULD_STATES, WIRE_MATERIALS, type MouldInput, type MouldStateValue, type WireMaterial } from '../types/mould'
 import { calculateMeshDensity } from '../utils/stripe'
@@ -26,11 +28,13 @@ export default function MouldLedger() {
   const error = useMouldStore((state) => state.error)
   const loadMoulds = useMouldStore((state) => state.loadMoulds)
   const addMould = useMouldStore((state) => state.addMould)
-  const setMouldState = useMouldStore((state) => state.setMouldState)
   const runs = useRunStore((state) => state.sheetRuns)
   const loadRuns = useRunStore((state) => state.loadRuns)
+  const reworkOrders = useReworkStore((state) => state.reworkOrders)
+  const loadReworkOrders = useReworkStore((state) => state.loadReworkOrders)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState<MouldInput>(emptyMouldForm)
+  const [reworkFormMouldId, setReworkFormMouldId] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const { mmPitchToThreadsPerCm } = useUnitConvert()
   const {
@@ -47,7 +51,13 @@ export default function MouldLedger() {
   useEffect(() => {
     void loadMoulds()
     void loadRuns()
-  }, [loadMoulds, loadRuns])
+    void loadReworkOrders()
+  }, [loadMoulds, loadRuns, loadReworkOrders])
+
+  const pendingReworkMouldIds = useMemo(
+    () => new Set(reworkOrders.filter((order) => order.state === '待应用').map((order) => order.mouldId)),
+    [reworkOrders],
+  )
 
   const calculatedDensity = useMemo(
     () => calculateMeshDensity(form.wireDiameter, form.stripeGap),
@@ -78,7 +88,7 @@ export default function MouldLedger() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, alignItems: { xs: 'flex-start', md: 'center' }, flexDirection: { xs: 'column', md: 'row' } }}>
         <Box>
           <Typography component="h1" variant="h3" color="#344a34">纸帘台帐</Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75 }}>维护帘框尺寸、丝材与帘纹密度，并登记修补状态。</Typography>
+          <Typography color="text.secondary" sx={{ mt: 0.75 }}>台帐保留现行规格；修补一律开立返修单，写清拟改规格与原因后再应用。</Typography>
         </Box>
         <Button variant="contained" size="large" onClick={() => setShowForm((current) => !current)} data-testid="new-mould">
           {showForm ? '收起登记' : '新建纸帘'}
@@ -217,6 +227,7 @@ export default function MouldLedger() {
                   <TableCell>
                     <Typography>{mould.stripeGap.toFixed(2)} mm</Typography>
                     <Typography variant="caption" color="text.secondary">{mould.meshDensity.toFixed(1)} 根/cm · 推算 {mmPitchToThreadsPerCm(mould.wireDiameter + mould.stripeGap).toFixed(1)}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>现行规格 v{mould.specRev ?? 1}</Typography>
                   </TableCell>
                   <TableCell>{mould.weaver}</TableCell>
                   <TableCell>
@@ -225,17 +236,22 @@ export default function MouldLedger() {
                   </TableCell>
                   <TableCell>
                     <Chip size="small" color={mould.state === '在用' ? 'success' : mould.state === '待修补' ? 'warning' : 'default'} label={mould.state} />
+                    {mould.id !== undefined && pendingReworkMouldIds.has(mould.id) && (
+                      <Chip size="small" color="warning" variant="outlined" label="返修单待应用" sx={{ ml: 0.5 }} />
+                    )}
                   </TableCell>
                   <TableCell align="right">
                     <Button
                       size="small"
                       variant={mould.state === '待修补' ? 'contained' : 'outlined'}
+                      color={mould.state === '待修补' ? 'warning' : 'primary'}
                       disabled={mould.state === '退役' || mould.id === undefined}
                       onClick={() => {
-                        if (mould.id !== undefined) void setMouldState(mould.id, mould.state === '待修补' ? '在用' : '待修补')
+                        if (mould.id !== undefined) setReworkFormMouldId(mould.id)
                       }}
+                      data-testid={mould.id === undefined ? undefined : `new-rework-${mould.id}`}
                     >
-                      {mould.state === '待修补' ? '完成修补' : '登记修补'}
+                      登记返修
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -247,6 +263,8 @@ export default function MouldLedger() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <ReworkOrderBoard formMouldId={reworkFormMouldId} onCloseForm={() => setReworkFormMouldId(null)} />
     </Stack>
   )
 }

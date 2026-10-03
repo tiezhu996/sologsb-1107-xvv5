@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { FiberBatch, FiberBatchInput } from '../types/fiber-batch'
-import { db, plain } from '../utils/db'
+import { CURRENT_SCHEMA_REV, db, plain } from '../utils/db'
 
 interface FiberStore {
   fiberBatches: FiberBatch[]
@@ -29,9 +29,9 @@ export const useFiberStore = create<FiberStore>((set, get) => ({
   addFiberBatch: async (input) => {
     set({ error: null })
     try {
-      const payload = plain(input)
+      const payload = plain({ ...input, schemaRev: CURRENT_SCHEMA_REV })
       const id = Number(await db.fiberBatches.add(payload))
-      const created: FiberBatch = { ...payload, id, schemaRev: 2 }
+      const created: FiberBatch = { ...payload, id }
       set((state) => ({ fiberBatches: [created, ...state.fiberBatches] }))
       return created
     } catch {

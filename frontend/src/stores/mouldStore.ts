@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import type { Mould, MouldInput, MouldStateValue } from '../types/mould'
-import { db, plain } from '../utils/db'
+import type { Mould, MouldInput } from '../types/mould'
+import { CURRENT_SCHEMA_REV, db, plain } from '../utils/db'
 
 interface MouldStore {
   moulds: Mould[]
@@ -9,7 +9,6 @@ interface MouldStore {
   error: string | null
   loadMoulds: () => Promise<void>
   addMould: (input: MouldInput) => Promise<Mould | null>
-  setMouldState: (id: number, state: MouldStateValue) => Promise<void>
 }
 
 export const useMouldStore = create<MouldStore>((set, get) => ({
@@ -30,25 +29,14 @@ export const useMouldStore = create<MouldStore>((set, get) => ({
   addMould: async (input) => {
     set({ error: null })
     try {
-      const payload = plain(input)
+      const payload = plain({ ...input, specRev: 1, schemaRev: CURRENT_SCHEMA_REV })
       const id = Number(await db.moulds.add(payload))
-      const created: Mould = { ...payload, id, schemaRev: 2 }
+      const created: Mould = { ...payload, id }
       set((state) => ({ moulds: [created, ...state.moulds] }))
       return created
     } catch {
       set({ error: '纸帘登记失败，请检查编号是否重复' })
       return null
-    }
-  },
-  setMouldState: async (id, nextState) => {
-    try {
-      await db.moulds.update(id, { state: nextState, schemaRev: 2 })
-      set((state) => ({
-        moulds: state.moulds.map((mould) => (mould.id === id ? { ...mould, state: nextState, schemaRev: 2 } : mould)),
-        error: null,
-      }))
-    } catch {
-      set({ error: '纸帘状态更新失败' })
     }
   },
 }))

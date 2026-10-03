@@ -18,6 +18,10 @@ export interface SheetRun {
   grammage: number
   measuredGap: number
   deviation: number
+  /** 登记工序时锁定的纸帘规格版本与快照，偏差判定以锁定规格为准 */
+  specRev: number
+  specWireDiameter: number
+  specStripeGap: number
   schemaRev?: number
 }
 
